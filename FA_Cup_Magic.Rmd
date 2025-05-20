@@ -1,0 +1,233 @@
+---
+title: "FA_Cup_Magic"
+author: "Ye Yint Win"& "Jaleta"
+date: "2023-05-03"
+output: html_document
+---
+
+# Is the FA Cup Magic Real?
+
+## Library
+
+Add tidyverse, dplyr and MASS library
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(MASS)
+```
+
+## Reading CSV
+
+First, go to this website <https://github.com/jalapic/engsoccerdata>.
+
+Click on data_raw, and then click on england.csv and click on "view raw" at the bottom and download the .csv file. Do the same thing to facup.csv.
+
+read_csv for both fa_cup and england data
+
+Filter Season to \>=1958 and round to (6,s,f) in fa_cup data.
+
+```{r}
+fa_cup<-read_csv("https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/facup.csv")#Getting Fa_Cup CSV
+#Filtering the Season because the raw data and English Football Association created a fourth division rather than thrid division(North and South)
+fa_cup<- fa_cup %>%
+  filter(
+    Season>= 1958,
+    round %in% c('6','s','f')
+  )
+fa_cup
+
+```
+
+Then, filter the england.csv to Season to \>=1958 and \<= 2016 to get the same Seasons with facup.csv.
+
+Then, create a new table, new_england, and do distinct with (home, Season, and division) and group by (Season and home). Make a new table, total_goals by grouping by the same thing and use summarise and sum of hgoal (homegoal).
+
+Now, left_join total_goals to the new_england table by the keys Season and home.
+
+```{r}
+#Getting All time Official english football match data
+#Filtering the data to match the FA Cup Data
+england<-read_csv("https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/england.csv")
+england <-england%>%
+  filter(
+    Season >=1958 & Season <=2016
+  )
+england
+
+
+#Getting only Season, home and Division to get leftjoin on Facup data
+new_england <- england %>%
+  distinct(home, Season, division)%>%
+  group_by(Season,home)
+
+total_goals <- england %>%
+  group_by(Season,home) %>%
+  summarize(total_goals = sum(hgoal))
+total_goals
+
+new_england <- left_join(new_england, total_goals, by = c("Season","home"))
+new_england
+```
+
+## Left-Joins
+
+Create a new table, join_facup_home, to get division and totalgoal number for the home team. Here, leftjoing by home and seasona, group by Season, and mutate division and total_goal to hometier and home_totalgoal so that it will be different from visitor's. Then, select the useful columns.
+
+Do the same for the new table for visitor team, join_facup_vis. But, here, don't select all columns, but only Season, home, visitor, visittier and vis_totalgoal so that the columns will not repeat in the leftjoin again later. (use dplyr:: select instead of just select).
+
+Lastly, create the last new table tier_facup to leftjoin the home table earlier from the visitor table earlier with the keys of Season, home, visitor. Then, select useful columns.
+
+```{r}
+#Left-join to FA_Cup to get which division the home team is in 
+join_facup_home<- left_join(fa_cup, new_england, by = c("home", "Season"))%>%
+  group_by(Season)%>%
+  mutate(hometier = division,home_totalgoal = total_goals) %>%
+  dplyr::select(Season:round, attendance, hometier,home_totalgoal)
+#Left-join to FA_Cup to get which division the visitor team is in 
+join_facup_vis<- left_join(fa_cup, new_england, by = c("visitor"= "home", "Season"))%>%
+  group_by(Season)%>%
+  mutate(visittier = division,vis_totalgoal = total_goals)%>%
+  dplyr::select(Season, home,visitor,visittier,vis_totalgoal)
+
+join_facup_home
+join_facup_vis
+
+
+#Left join to the home table from visitor team so that we can have division data for both sides
+tier_facup<- left_join(join_facup_home,join_facup_vis, by = c( "Season", "home","visitor"))
+tier_facup<- tier_facup%>%
+  dplyr::select(Season: hometier, visittier,home_totalgoal,vis_totalgoal)
+  
+tier_facup
+
+
+```
+
+## Mutate in Wrangled Data
+
+```{r}
+
+#
+tier_facup<- tier_facup %>%
+  mutate( 
+  match_won = hgoal-vgoal, #Match winner
+  match_won = ifelse(match_won>0, "H", ifelse(match_won<0, "V","T")), # Determining Winner or Tie
+  tier_diff = as.numeric(hometier)-as.numeric(visittier), #getting Division/Tier Difference
+  tier_diff = ifelse(tier_diff<0, tier_diff*(-1), tier_diff),#Making all tier_diff positives
+  magic = case_when
+         (
+    as.numeric(hometier)<as.numeric(visittier) & hgoal>vgoal | 
+    as.numeric(hometier)>as.numeric(visittier) & hgoal<vgoal |   
+    as.numeric(hometier)>as.numeric(visittier) & hgoal == vgoal | 
+    as.numeric(hometier)<as.numeric(visittier) & hgoal==vgoal ~ 1, 
+    TRUE ~ 0
+  ),
+  goal_diff = case_when
+         (
+    as.numeric(hometier)<as.numeric(visittier) & hgoal>vgoal | 
+    as.numeric(hometier)>as.numeric(visittier) & hgoal<vgoal |   
+    as.numeric(hometier)>as.numeric(visittier) & hgoal == vgoal | 
+    as.numeric(hometier)<as.numeric(visittier) & hgoal==vgoal ~ as.numeric(home_totalgoal)-as.numeric(vis_totalgoal), 
+    TRUE ~ NA_real_),
+  goal_diff= ifelse(goal_diff<0, goal_diff*(-1),goal_diff),
+  real_goal_diff = as.numeric(home_totalgoal)-as.numeric(vis_totalgoal),
+  real_goal_diff = ifelse(real_goal_diff<0, real_goal_diff*(-1),real_goal_diff)
+  )
+
+tier_facup
+```
+
+```{r}
+
+tier_facup<-tier_facup%>% 
+  mutate(tier_diff = as.numeric(as.character(tier_diff)))
+tier_facup
+
+```
+
+```{r}
+mod4 <- glm(magic ~ real_goal_diff + as.factor(tier_diff) +real_goal_diff : as.factor(tier_diff), data = tier_facup, family= "binomial") 
+summary(mod4)
+mod.4<- coef(mod4)
+
+mean_rgd <- mean(tier_facup$real_goal_diff[!is.na(tier_facup$real_goal_diff)])
+mean_td <- mean(as.numeric(tier_facup$tier_diff[!is.na(tier_facup$tier_diff)]))
+
+mean_rgd
+mean_td
+
+func.4.rdg <- function(x){plogis(mod.4[1]+mod.4[2]*x+mod.4[3]*mean_td)}
+ggplot(tier_facup) +
+  geom_jitter( aes(x = real_goal_diff,y=magic), height = 0.05,alpha = 1) +
+  geom_function(fun = func.4.rdg, color = "red")
+
+func.4.td1 <- function(x){plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[3]*x+mod.4[6]*x)}
+func.4.td2 <- function(x){plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[4]*x+mod.4[7]*x)}
+func.4.td3 <- function(x){plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[5]*x+mod.4[8]*x)}
+func.4.td0 <- function(x){plogis(mod.4[1]+mod.4[2]*mean_rgd+x*0)}
+
+
+# Plot the functions
+ggplot(tier_facup) +
+  geom_jitter(aes(x = tier_diff, y = magic), height = 0.05, alpha = 1) +
+  geom_function(fun = func.4.td1, color = "red") +
+  geom_function(fun = func.4.td2, color = "blue") +
+  geom_function(fun = func.4.td3, color = "darkgreen") +
+  geom_function(fun = func.4.td0, color = "black")+
+  labs(title = "Probabilty of Lower-division team winning using goal difference in their normal season and Division")
+
+
+1-plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[3])
+1-plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[3]+ mod.4[6])
+1-plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[4]+ mod.4[7])
+1-plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[5]+ mod.4[8])
+
+exp(1-plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[3]))
+exp(1-plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[3]+ mod.4[6]))
+exp(1-plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[4]+ mod.4[7]))
+exp(1-plogis(mod.4[1]+mod.4[2]*mean_rgd+mod.4[5]+ mod.4[8]))
+
+
+```
+
+```{r}
+mod5 <- glm(magic ~ real_goal_diff +attendance+ as.factor(tier_diff), data = tier_facup, family= "binomial") 
+summary(mod5)
+mod.5<- coef(mod5)
+
+
+mean_att<- mean(as.numeric(tier_facup$attendance[!is.na(tier_facup$attendance)]))
+mean_att 
+
+
+func.3.rdg <- function(x){plogis(mod.3[1]+mod.3[2]*x+mod.3[3]*mean_td)}
+ggplot(tier_facup) +
+  geom_jitter( aes(x = real_goal_diff,y=magic), height = 0.05,alpha = 1) +
+  geom_function(fun = func.3.rdg, color = "red")
+
+func.5.td1 <- function(x){plogis(mod.5[1]+mod.5[2]*mean_rgd+mod.5[3]* mean_att+ mod.5[4]*x)}
+func.5.td2 <- function(x){plogis(mod.5[1]+mod.5[2]*mean_rgd+mod.5[3]* mean_att+ mod.5[5]*x)}
+func.5.td0 <- function(x){plogis(mod.5[1]+mod.5[2]*mean_rgd+mod.5[3]* mean_att+x*0)}
+
+ggplot(tier_facup) +
+  geom_jitter( aes(x = tier_diff,y=magic), height = 0.05,alpha = 1) +
+  geom_function(fun = func.5.td0, color = "red")+
+  geom_function(fun = func.5.td1, color = "blue")+
+  geom_function(fun = func.5.td2, color = "darkgreen")
+
+exp(1-plogis(mod.5[1]+mod.5[2]*mean_rgd+mod.5[3]* mean_att))
+exp(1-plogis(mod.5[1]+mod.5[2]*mean_rgd+mod.5[3]* mean_att+mod.5[4]))
+exp(1-plogis(mod.5[1]+mod.5[2]*mean_rgd+mod.5[3]* mean_att+ mod.5[5]))
+
+
+```
+
+```{r}
+mod4$aic
+mod5$aic
+
+anova(mod4, test="Chisq")
+anova(mod5, test="Chisq")
+```
